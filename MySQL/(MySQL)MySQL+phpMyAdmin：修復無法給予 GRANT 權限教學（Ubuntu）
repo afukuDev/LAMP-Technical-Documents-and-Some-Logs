@@ -1,0 +1,131 @@
+
+# MySQL / phpMyAdmin：修復無法給予 GRANT 權限教學（Ubuntu）
+
+> 說明：本教學針對常見情況整理 — 當你在 phpMyAdmin 或 MySQL 中無法為某使用者（例如 `medical`）勾選或生效 `GRANT` 權限時，請依下列步驟操作。
+> 此文件包含 CLI 指令、原因說明與驗證方式，此MD 或作為教學手冊。
+> 
+>  適用版本：Ubuntu 24.04 LTS (Noble Numbat)  
+> 作者：afuku  
+> 更新日期：2025-11-09
+
+---
+
+## 1. 問題概述
+- 你在 phpMyAdmin 嘗試給 `medical` 使用者全部權限，但畫面或 `GRANT` 選項沒有生效，或給完後仍看不到 `WITH GRANT OPTION`。  
+- 原因通常是：`medical` 本身沒有 `GRANT OPTION`，或你是以沒有足夠權限的使用者登入（不是 root，也沒 `GRANT OPTION`）。
+- 另外，若 `root` 在 phpMyAdmin 無法登入，可能因為 `root` **無密碼**，而 phpMyAdmin 設定不允許無密碼登入（`AllowNoPassword=false`）。
+
+---
+
+## 2. 預備步驟（以 Ubuntu 終端為主）
+
+### 2.1 以系統權限進入 MySQL（不需 root 密碼）
+```bash
+sudo mysql
+```
+> 在某些系統 `sudo mysql` 會直接以 unix_socket 驗證登入 MySQL shell（適用於 Ubuntu 的預設安裝方式）。
+
+---
+
+## 3. 若 root 無密碼 — **先設定 root 密碼**（必要）
+若 phpMyAdmin 顯示「禁止無密碼登入 (AllowNoPassword)」，請在 MySQL shell 執行（將 `你的新密碼` 改成你要用的密碼）：
+```sql
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '你的新密碼';
+FLUSH PRIVILEGES;
+```
+離開 MySQL：
+```sql
+exit;
+```
+用剛剛設定的密碼測試登入：
+```bash
+mysql -u root -p
+# 輸入密碼
+```
+
+> 若你不想在 phpMyAdmin 使用 root，也可僅用 CLI 的 `sudo mysql` 完成之後的步驟。
+
+---
+
+## 4. 以 root（或有相等權限）給 `medical` 帳號 `WITH GRANT OPTION`
+請使用擁有足夠權限的帳號（例如 `root`）執行下列指令：
+```bash
+sudo mysql -u root -p
+```
+在 MySQL 提示符下執行：
+```sql
+-- 給 127.0.0.1 的 medical 帳號全部權限，並允許其授權他人
+GRANT ALL PRIVILEGES ON medical.* TO 'medical'@'127.0.0.1' WITH GRANT OPTION;
+
+-- 若你也有 'medical'@'localhost' 的帳號，建議一起設定
+GRANT ALL PRIVILEGES ON medical.* TO 'medical'@'localhost' WITH GRANT OPTION;
+
+-- 立即刷新權限快取（建議執行）
+FLUSH PRIVILEGES;
+```
+> 注意：`WITH GRANT OPTION` 才能讓該帳號使用 `GRANT`/`REVOKE` 去授權其他帳號。
+
+---
+
+## 5. 驗證（確認 `WITH GRANT OPTION` 生效）
+以 MySQL CLI 執行：
+```sql
+SHOW GRANTS FOR 'medical'@'127.0.0.1';
+```
+你應該會看到類似的結果：
+```
+GRANT ALL PRIVILEGES ON `medical`.* TO 'medical'@'127.0.0.1' WITH GRANT OPTION
+```
+
+若看到 `WITH GRANT OPTION` 即表示成功。
+
+---
+
+## 6. 若 phpMyAdmin 仍顯示沒有勾選（UI / 快取問題）
+- phpMyAdmin 的 GUI 勾選欄位並不總是能完整反映底層實際執行的 SQL（尤其不同版本或語言介面）。  
+- 只要 `SHOW GRANTS ...` 輸出含 `WITH GRANT OPTION`，代表權限已生效，即可安全使用。
+
+---
+
+## 7. 常見問題與排錯建議
+- **我看到權限但 phpMyAdmin 還是無法勾選「GRANT」**：以 CLI 為準（`SHOW GRANTS`）。
+- **我無法用 `sudo mysql` 進入**：請確認你有 sudo 權限，或使用 `sudo systemctl status mysql` 檢查 MySQL 是否啟動。若 MySQL 未啟動，執行 `sudo systemctl start mysql`。
+- **是否可以把 `AllowNoPassword` 打開？** 不建議。若測試環境需要，可在 `/etc/phpmyadmin/config.inc.php` 修改 `$cfg['Servers'][$i]['AllowNoPassword'] = true;`，但生產或公開環境切勿開啟無密碼登入。
+
+---
+
+## 8. 完整指令匯總（可複製執行）
+```bash
+# 1) 以系統權限進入 MySQL
+sudo mysql
+
+# 2) (若需要)設定 root 密碼（在 mysql 提示符下執行）
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '你的新密碼';
+FLUSH PRIVILEGES;
+exit;
+
+# 3) 用 root 登入並給予 medical WITH GRANT OPTION
+sudo mysql -u root -p
+# 輸入密碼
+GRANT ALL PRIVILEGES ON medical.* TO 'medical'@'127.0.0.1' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON medical.* TO 'medical'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+
+# 4) 驗證
+SHOW GRANTS FOR 'medical'@'127.0.0.1';
+```
+
+---
+
+## 9. 安全建議
+- 不要給使用者不必要的 `WITH GRANT OPTION`。只有管理者或自動化管理帳號需要此權限。  
+- root 密碼請設定為強密碼，避免設定過於簡單或在公用網路上使用。  
+- 若只是要讓 web 應用（例如 PHP）存取 DB，應建立專用帳號且只給需要的權限（SELECT/INSERT/UPDATE 等），不要給 ALL + GRANT。
+
+---
+
+如果你需要，我可以：
+- 把這份文件轉成 `.md` 並提供下載連結（我已將檔案存到系統），或
+- 幫你把實際在你伺服器上執行的 `SHOW GRANTS` 結果檢查，或
+- 產生包含你畫面（phpMyAdmin 截圖）+步驟的更完整教學 PDF。
+
